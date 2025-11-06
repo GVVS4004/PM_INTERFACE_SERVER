@@ -3,12 +3,16 @@ const cors = require('cors');
 const bodyParser = require('body-parser');
 const cookieParser = require('cookie-parser');
 const OpenAI = require('openai');
+const dotenv = require('dotenv');
+
+// Load environment variables from .env file
+dotenv.config();
 
 const app = express();
-const PORT = 4000;
+const PORT = process.env.PORT || 5000;
 
 // Middleware
-app.use(cors({ origin: 'http://localhost:5173', credentials: true }));
+app.use(cors({ origin: '*', credentials: true }));
 app.use(bodyParser.json());
 app.use(cookieParser());
 
