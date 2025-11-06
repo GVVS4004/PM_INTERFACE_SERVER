@@ -82,6 +82,7 @@ app.post('/api/auth/logout', (req, res) => {
 
 app.get('/api/auth/me', (req, res) => {
   const email = req.cookies.userEmail;
+  console.log(req);
 
   if (!email) {
     return res.status(401).json({ error: 'Not authenticated' });
@@ -139,7 +140,7 @@ app.get('/api/events', (req, res) => {
 
 app.get('/api/notifications', (req, res) => {
   const email = req.cookies.userEmail;
-
+  console.log(req);
   if (!email) {
     return res.status(401).json({ error: 'Not authenticated' });
   }
@@ -417,7 +418,7 @@ app.post('/api/ai/suggest', async (req, res) => {
 app.get('/api/recipients', (req, res) => {
   const email = req.cookies.userEmail;
 
-  console.log('GET /api/recipients - Email from cookie:', email);
+  console.log('GET /api/recipients - Email from cookie:', req);
   console.log('Recipients list:', recipientsList);
 
   if (!email) {
