@@ -2,7 +2,7 @@ const express = require("express");
 const cors = require("cors");
 const bodyParser = require("body-parser");
 const cookieParser = require("cookie-parser");
-const OpenAI = require("openai");
+const Anthropic = require("@anthropic-ai/sdk");
 const dotenv = require("dotenv");
 
 // Load environment variables from .env file
@@ -86,37 +86,95 @@ const recipientsList = [
   },
 ];
 
-// Recipient groups
+// Recipient groups with users
 const recipientGroups = [
   {
     id: 1,
     name: "Engineering",
     description: "Development and QA teams",
     color: "#007bff",
+    users: [
+      { userId: 1, name: "John Doe", email: "john.doe@company.com" },
+      { userId: 2, name: "Jane Smith", email: "jane.smith@company.com" },
+      { userId: 3, name: "Mike Johnson", email: "mike.j@company.com" },
+      { userId: 4, name: "Sarah Wilson", email: "sarah.w@company.com" },
+      { userId: 5, name: "Tom Brown", email: "tom.brown@company.com" },
+      { userId: 6, name: "Emily Davis", email: "emily.d@company.com" },
+    ],
+    applicationIds: [1, 2], // Which apps this group has access to
   },
   {
     id: 2,
     name: "Business",
     description: "Sales, Marketing, and Management",
     color: "#28a745",
+    users: [
+      { userId: 7, name: "Robert Taylor", email: "robert.t@company.com" },
+      { userId: 8, name: "Lisa Anderson", email: "lisa.a@company.com" },
+      { userId: 9, name: "David Martinez", email: "david.m@company.com" },
+      { userId: 10, name: "Jennifer Lee", email: "jennifer.l@company.com" },
+    ],
+    applicationIds: [1, 3],
   },
   {
     id: 3,
     name: "Support",
     description: "Customer support and service",
     color: "#ffc107",
+    users: [
+      { userId: 11, name: "Chris Garcia", email: "chris.g@company.com" },
+      { userId: 12, name: "Amanda White", email: "amanda.w@company.com" },
+      { userId: 13, name: "Kevin Harris", email: "kevin.h@company.com" },
+    ],
+    applicationIds: [2, 3],
+  },
+];
+
+// External Applications Registry
+const applications = [
+  {
+    id: 1,
+    name: "CRM Dashboard",
+    baseUrl: process.env.CRM_BASE_URL || "https://webhook.site/your-webhook-id-1",
+    notificationEndpoint: "",
+    apiKey: "crm-api-key-123",
+    status: "active",
+    activeUsers: 15,
+    description: "Customer Relationship Management System"
+  },
+  {
+    id: 2,
+    name: "Analytics Platform",
+    baseUrl: "https://webhook.site/your-webhook-id-2",
+    notificationEndpoint: "",
+    apiKey: "analytics-api-key-456",
+    status: "active",
+    activeUsers: 12,
+    description: "Business Analytics and Reporting"
+  },
+  {
+    id: 3,
+    name: "Project Manager Tool",
+    baseUrl: "https://webhook.site/your-webhook-id-3",
+    notificationEndpoint: "",
+    apiKey: "pm-api-key-789",
+    status: "active",
+    activeUsers: 8,
+    description: "Project Management and Tracking"
   },
 ];
 
 let nextRecipientId = 7;
 let nextGroupId = 4;
+let nextApplicationId = 4;
+let nextUserId = 14;
 
 // Active SSE connections
 const clients = new Map(); // email -> response object
 
-// OpenAI setup (you'll need to add your API key)
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY || "your-api-key-here",
+// Claude API setup (you'll need to add your API key)
+const anthropic = new Anthropic({
+  apiKey: process.env.ANTHROPIC_API_KEY || "your-api-key-here",
 });
 
 // ----- Authentication Routes -----
@@ -487,28 +545,29 @@ app.post("/api/ai/suggest", async (req, res) => {
   }
 
   try {
-    const completion = await openai.chat.completions.create({
-      model: "gpt-3.5-turbo",
+    const message = await anthropic.messages.create({
+      model: "claude-3-opus-20240229",
+      max_tokens: 1024,
       messages: [
         {
-          role: "system",
-          content:
-            "You are a helpful assistant for product managers. You help improve and edit release notes, make them more professional, clear, and concise.",
-        },
-        {
           role: "user",
-          content: `Current release notes:\n\n${content}\n\nUser request: ${prompt}\n\nProvide the improved version:`,
+          content: `You are a helpful assistant for product managers. You help improve and edit release notes, make them more professional, clear, and concise.
+
+Current release notes:
+${content}
+
+User request: ${prompt}
+
+Provide the improved version:`,
         },
       ],
-      temperature: 0.7,
-      max_tokens: 1000,
     });
 
-    const suggestion = completion.choices[0].message.content;
+    const suggestion = message.content[0].text;
 
     res.json({ suggestion });
   } catch (error) {
-    console.error("OpenAI API error:", error);
+    console.error("Claude API error:", error);
     res
       .status(500)
       .json({
@@ -694,7 +753,7 @@ app.delete("/api/recipients/:id", (req, res) => {
 
 // ----- Group CRUD Operations -----
 
-// Get all groups
+// Get all groups with enhanced data
 app.get("/api/groups", (req, res) => {
   const email = req.cookies.userEmail;
 
@@ -702,7 +761,16 @@ app.get("/api/groups", (req, res) => {
     return res.status(401).json({ error: "Not authenticated" });
   }
 
-  res.json(recipientGroups);
+  // Return groups with user count and application info
+  const groupsWithCounts = recipientGroups.map(group => ({
+    ...group,
+    userCount: group.users ? group.users.length : 0,
+    applications: applications.filter(app =>
+      group.applicationIds && group.applicationIds.includes(app.id)
+    ).map(app => ({ id: app.id, name: app.name }))
+  }));
+
+  res.json(groupsWithCounts);
 });
 
 // Create new group
@@ -782,6 +850,442 @@ app.delete("/api/groups/:id", (req, res) => {
   console.log("Group deleted:", deleted);
 
   res.json({ success: true, deleted });
+});
+
+// ----- Application Management -----
+
+// Get all applications
+app.get("/api/applications", (req, res) => {
+  const email = req.cookies.userEmail;
+
+  if (!email) {
+    return res.status(401).json({ error: "Not authenticated" });
+  }
+
+  console.log(`Sending ${applications.length} applications to ${email}`);
+  res.json(applications);
+});
+
+// Create new application
+app.post("/api/applications", (req, res) => {
+  const email = req.cookies.userEmail;
+  const { name, baseUrl, notificationEndpoint, apiKey, description, activeUsers } = req.body;
+
+  if (!email) {
+    return res.status(401).json({ error: "Not authenticated" });
+  }
+
+  if (!name || !baseUrl) {
+    return res.status(400).json({ error: "Name and baseUrl are required" });
+  }
+
+  const newApp = {
+    id: nextApplicationId++,
+    name,
+    baseUrl,
+    notificationEndpoint: notificationEndpoint || "",
+    apiKey: apiKey || "",
+    status: "active",
+    activeUsers: activeUsers || 0,
+    description: description || "",
+  };
+
+  applications.push(newApp);
+  console.log("New application created:", newApp);
+
+  res.json(newApp);
+});
+
+// Update application
+app.put("/api/applications/:id", (req, res) => {
+  const email = req.cookies.userEmail;
+  const appId = parseInt(req.params.id);
+  const { name, baseUrl, notificationEndpoint, apiKey, description, activeUsers, status } = req.body;
+
+  if (!email) {
+    return res.status(401).json({ error: "Not authenticated" });
+  }
+
+  const app = applications.find((a) => a.id === appId);
+
+  if (!app) {
+    return res.status(404).json({ error: "Application not found" });
+  }
+
+  if (name) app.name = name;
+  if (baseUrl) app.baseUrl = baseUrl;
+  if (notificationEndpoint !== undefined) app.notificationEndpoint = notificationEndpoint;
+  if (apiKey !== undefined) app.apiKey = apiKey;
+  if (description !== undefined) app.description = description;
+  if (activeUsers !== undefined) app.activeUsers = activeUsers;
+  if (status) app.status = status;
+
+  console.log("Application updated:", app);
+
+  res.json(app);
+});
+
+// Delete application
+app.delete("/api/applications/:id", (req, res) => {
+  const email = req.cookies.userEmail;
+  const appId = parseInt(req.params.id);
+
+  if (!email) {
+    return res.status(401).json({ error: "Not authenticated" });
+  }
+
+  const index = applications.findIndex((a) => a.id === appId);
+
+  if (index === -1) {
+    return res.status(404).json({ error: "Application not found" });
+  }
+
+  const deleted = applications.splice(index, 1)[0];
+  console.log("Application deleted:", deleted);
+
+  res.json({ success: true, deleted });
+});
+
+// ----- Bulk Notification Send to External Applications -----
+
+app.post("/api/notifications/:id/send-bulk", async (req, res) => {
+  const email = req.cookies.userEmail;
+  const notificationId = parseInt(req.params.id);
+  const { groupIds, applicationIds } = req.body;
+
+  if (!email) {
+    return res.status(401).json({ error: "Not authenticated" });
+  }
+
+  const notification = notifications.find(
+    (n) => n.id === notificationId && n.targetEmail === email
+  );
+
+  if (!notification) {
+    return res.status(404).json({ error: "Notification not found" });
+  }
+
+  if (!groupIds || !Array.isArray(groupIds) || groupIds.length === 0) {
+    return res.status(400).json({ error: "Please select at least one group" });
+  }
+
+  if (!applicationIds || !Array.isArray(applicationIds) || applicationIds.length === 0) {
+    return res.status(400).json({ error: "Please select at least one application" });
+  }
+
+  // Collect users from selected groups
+  const selectedGroups = recipientGroups.filter((g) => groupIds.includes(g.id));
+  const allUsersMap = new Map(); // For deduplication
+
+  selectedGroups.forEach(group => {
+    if (group.users) {
+      group.users.forEach(user => {
+        allUsersMap.set(user.userId, user);
+      });
+    }
+  });
+
+  const allUsers = Array.from(allUsersMap.values());
+
+  if (allUsers.length === 0) {
+    return res.status(400).json({ error: "No users found in selected groups" });
+  }
+
+  // Get selected applications
+  const selectedApplications = applications.filter((a) => applicationIds.includes(a.id));
+
+  if (selectedApplications.length === 0) {
+    return res.status(400).json({ error: "No valid applications selected" });
+  }
+
+  const results = [];
+  const errors = [];
+
+  // Send to each application
+  for (const app of selectedApplications) {
+    try {
+      const payload = {
+        source: "PM_INTERFACE",
+        notificationId: notification.id,
+        title: notification.title,
+        content: notification.content,
+        priority: "high",
+        type: "release_notes",
+        targetUsers: allUsers,
+        metadata: {
+          sentBy: email,
+          sentAt: new Date().toISOString(),
+          jiraReleaseNotes: notification.jiraReleaseNotes,
+          groups: selectedGroups.map(g => ({ id: g.id, name: g.name })),
+          applicationId: app.id,
+          applicationName: app.name
+        },
+        // Tracking configuration
+        trackingEnabled: true,
+        trackingCallbackUrl: `${process.env.BACKEND_URL || 'http://localhost:5000'}/api/notifications/track-open`
+      };
+
+      console.log(`\n${"=".repeat(60)}`);
+      console.log(`📤 Sending bulk notification to: ${app.name}`);
+      console.log(`   URL: ${app.baseUrl}${app.notificationEndpoint}`);
+      console.log(`   Total Users: ${allUsers.length}`);
+      console.log(`   Groups: ${selectedGroups.map(g => g.name).join(", ")}`);
+      console.log(`${"=".repeat(60)}\n`);
+
+      // Make HTTP POST request to external application
+      const fetch = require("node-fetch");
+      const targetUrl = app.baseUrl + (app.notificationEndpoint || "");
+
+      const response = await fetch(targetUrl, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": app.apiKey ? `Bearer ${app.apiKey}` : "",
+          "X-PM-Interface-Source": "true"
+        },
+        body: JSON.stringify(payload),
+        timeout: 10000 // 10 second timeout
+      });
+
+      const responseData = await response.text();
+
+      results.push({
+        applicationId: app.id,
+        applicationName: app.name,
+        success: response.ok,
+        statusCode: response.status,
+        userCount: allUsers.length,
+        responseData: responseData
+      });
+
+      console.log(`✅ Successfully sent to ${app.name} (Status: ${response.status})`);
+
+    } catch (error) {
+      console.error(`❌ Failed to send to ${app.name}:`, error.message);
+      errors.push({
+        applicationId: app.id,
+        applicationName: app.name,
+        error: error.message
+      });
+      results.push({
+        applicationId: app.id,
+        applicationName: app.name,
+        success: false,
+        error: error.message,
+        userCount: allUsers.length
+      });
+    }
+  }
+
+  // Create sent release record with tracking
+  const sentRelease = {
+    id: sentReleases.length + 1,
+    notificationId,
+    sentBy: email,
+    groups: selectedGroups,
+    applications: selectedApplications,
+    totalUsers: allUsers.length,
+    users: allUsers,
+    content: notification.content,
+    title: notification.title,
+    sentAt: new Date().toISOString(),
+    results: results,
+    // Tracking data
+    tracking: {
+      totalSent: allUsers.length,
+      opened: 0,
+      openedUsers: [],
+      openRate: 0,
+      lastOpenedAt: null
+    }
+  };
+
+  sentReleases.push(sentRelease);
+
+  // Update notification status
+  notification.status = "sent";
+  notification.sentTo = allUsers;
+  notification.sentAt = new Date().toISOString();
+  notification.sentVia = {
+    groups: selectedGroups.map(g => ({ id: g.id, name: g.name })),
+    applications: selectedApplications.map(a => ({ id: a.id, name: a.name }))
+  };
+  notification.tracking = {
+    totalSent: allUsers.length,
+    opened: 0,
+    openedUsers: [],
+    openRate: 0,
+    lastOpenedAt: null
+  };
+
+  const successCount = results.filter(r => r.success).length;
+  const failureCount = results.filter(r => !r.success).length;
+
+  console.log(`\n${"=".repeat(60)}`);
+  console.log(`📊 Bulk Send Summary:`);
+  console.log(`   Total Applications: ${selectedApplications.length}`);
+  console.log(`   Successful: ${successCount}`);
+  console.log(`   Failed: ${failureCount}`);
+  console.log(`   Total Users Notified: ${allUsers.length}`);
+  console.log(`   Groups: ${selectedGroups.map(g => g.name).join(", ")}`);
+  console.log(`${"=".repeat(60)}\n`);
+
+  res.json({
+    success: true,
+    message: `Notification sent to ${allUsers.length} users across ${successCount} application(s)`,
+    summary: {
+      totalApplications: selectedApplications.length,
+      successfulApplications: successCount,
+      failedApplications: failureCount,
+      totalUsers: allUsers.length,
+      groups: selectedGroups.map(g => ({ id: g.id, name: g.name, userCount: g.users.length })),
+      applications: selectedApplications.map(a => ({ id: a.id, name: a.name }))
+    },
+    results: results,
+    sentRelease: sentRelease
+  });
+});
+
+// ----- Notification Tracking Endpoints -----
+
+// Track when a user opens a notification (callback from external app)
+app.post("/api/notifications/track-open", (req, res) => {
+  const { notificationId, userId, userEmail, userName, applicationId, applicationName, openedAt } = req.body;
+
+  console.log(`\n${"=".repeat(60)}`);
+  console.log(`👀 Notification Opened Tracking:`);
+  console.log(`   Notification ID: ${notificationId}`);
+  console.log(`   User: ${userName} (${userEmail})`);
+  console.log(`   Application: ${applicationName}`);
+  console.log(`   Opened At: ${openedAt}`);
+  console.log(`${"=".repeat(60)}\n`);
+
+  if (!notificationId || !userId) {
+    return res.status(400).json({ error: "notificationId and userId are required" });
+  }
+
+  // Find the sent release record
+  const sentRelease = sentReleases.find(sr => sr.notificationId === notificationId);
+
+  if (!sentRelease) {
+    return res.status(404).json({ error: "Sent release record not found" });
+  }
+
+  // Check if user already opened it (prevent duplicates)
+  const alreadyOpened = sentRelease.tracking.openedUsers.some(u => u.userId === userId);
+
+  if (alreadyOpened) {
+    console.log(`   ⚠️  User already opened this notification`);
+    return res.json({
+      success: true,
+      message: "Already tracked",
+      alreadyTracked: true
+    });
+  }
+
+  // Add to opened users
+  const openedUser = {
+    userId,
+    name: userName || userEmail,
+    email: userEmail,
+    openedAt: openedAt || new Date().toISOString(),
+    applicationId: applicationId || null,
+    applicationName: applicationName || "Unknown"
+  };
+
+  sentRelease.tracking.openedUsers.push(openedUser);
+  sentRelease.tracking.opened = sentRelease.tracking.openedUsers.length;
+  sentRelease.tracking.openRate = Math.round((sentRelease.tracking.opened / sentRelease.tracking.totalSent) * 100);
+  sentRelease.tracking.lastOpenedAt = openedUser.openedAt;
+
+  // Update the notification object as well
+  const notification = notifications.find(n => n.id === notificationId);
+  if (notification && notification.tracking) {
+    notification.tracking.openedUsers.push(openedUser);
+    notification.tracking.opened = notification.tracking.openedUsers.length;
+    notification.tracking.openRate = Math.round((notification.tracking.opened / notification.tracking.totalSent) * 100);
+    notification.tracking.lastOpenedAt = openedUser.openedAt;
+  }
+
+  console.log(`   ✅ Tracking updated: ${sentRelease.tracking.opened}/${sentRelease.tracking.totalSent} opened (${sentRelease.tracking.openRate}%)`);
+
+  res.json({
+    success: true,
+    message: "Notification open tracked successfully",
+    tracking: {
+      totalSent: sentRelease.tracking.totalSent,
+      opened: sentRelease.tracking.opened,
+      openRate: sentRelease.tracking.openRate
+    }
+  });
+});
+
+// Get tracking statistics for a notification
+app.get("/api/notifications/:id/tracking", (req, res) => {
+  const notificationId = parseInt(req.params.id);
+  const email = req.cookies.userEmail;
+
+  if (!email) {
+    return res.status(401).json({ error: "Not authenticated" });
+  }
+
+  // Find the notification
+  const notification = notifications.find(n => n.id === notificationId && n.targetEmail === email);
+
+  if (!notification) {
+    return res.status(404).json({ error: "Notification not found" });
+  }
+
+  // Find the sent release record
+  const sentRelease = sentReleases.find(sr => sr.notificationId === notificationId);
+
+  if (!sentRelease || !sentRelease.tracking) {
+    return res.json({
+      notificationId,
+      totalSent: 0,
+      totalOpened: 0,
+      openRate: 0,
+      openedUsers: [],
+      notOpenedUsers: [],
+      byApplication: []
+    });
+  }
+
+  // Get users who haven't opened
+  const openedUserIds = new Set(sentRelease.tracking.openedUsers.map(u => u.userId));
+  const notOpenedUsers = sentRelease.users.filter(u => !openedUserIds.has(u.userId));
+
+  // Group by application
+  const byApplication = sentRelease.applications.map(app => {
+    const appOpenedUsers = sentRelease.tracking.openedUsers.filter(u => u.applicationId === app.id);
+    const appTotalUsers = sentRelease.users.filter(user => {
+      // Find which groups this user belongs to
+      const userGroups = sentRelease.groups.filter(g =>
+        g.users && g.users.some(gu => gu.userId === user.userId)
+      );
+      // Check if any of these groups have access to this application
+      return userGroups.some(g => g.applicationIds && g.applicationIds.includes(app.id));
+    });
+
+    return {
+      applicationId: app.id,
+      applicationName: app.name,
+      totalSent: appTotalUsers.length,
+      opened: appOpenedUsers.length,
+      openRate: appTotalUsers.length > 0 ? Math.round((appOpenedUsers.length / appTotalUsers.length) * 100) : 0
+    };
+  });
+
+  res.json({
+    notificationId,
+    totalSent: sentRelease.tracking.totalSent,
+    totalOpened: sentRelease.tracking.opened,
+    openRate: sentRelease.tracking.openRate,
+    openedUsers: sentRelease.tracking.openedUsers,
+    notOpenedUsers: notOpenedUsers,
+    byApplication: byApplication,
+    lastOpenedAt: sentRelease.tracking.lastOpenedAt
+  });
 });
 
 // ----- Test Data Creation (for demo purposes) -----
