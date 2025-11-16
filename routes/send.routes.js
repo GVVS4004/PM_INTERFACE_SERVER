@@ -150,42 +150,117 @@ router.post('/:id/send-bulk', async (req, res) => {
     // Send to each application
     for (const app of selectedApplications) {
       try {
-        const payload = {
-          source: 'PM_INTERFACE',
-          notificationId: notification._id.toString(),
-          title: notification.title,
-          content: notification.content,
-          priority: 'high',
-          type: 'release_notes',
-          targetUsers: allUsers,
-          metadata: {
-            sentBy: email,
-            sentAt: new Date().toISOString(),
-            jiraReleaseNotes: notification.jiraReleaseNotes,
-            groups: selectedGroups.map((g) => ({ id: g.groupId, name: g.name })),
-            applicationId: app.applicationId,
-            applicationName: app.name,
-          },
-          trackingEnabled: true,
-          trackingCallbackUrl: `${
-            process.env.BACKEND_URL || 'http://localhost:5000'
-          }/api/notifications/track-open`,
-        };
+        let payload;
+        let targetUrl;
+
+        // Check if application type is TEAMS
+        if (app.applicationType === 'TEAMS') {
+          // Microsoft Teams Adaptive Card format
+          payload = {
+            type: 'message',
+            attachments: [
+              {
+                contentType: 'application/vnd.microsoft.card.adaptive',
+                contentUrl: null,
+                content: {
+                  $schema: 'http://adaptivecards.io/schemas/adaptive-card.json',
+                  type: 'AdaptiveCard',
+                  version: '1.4',
+                  body: [
+                    {
+                      type: 'TextBlock',
+                      text: '🚀 New Release Notification',
+                      weight: 'Bolder',
+                      size: 'Large',
+                      color: 'Accent',
+                    },
+                    {
+                      type: 'TextBlock',
+                      text: notification.title,
+                      weight: 'Bolder',
+                      size: 'Medium',
+                      wrap: true,
+                      spacing: 'Medium',
+                    },
+                    {
+                      type: 'TextBlock',
+                      text: notification.content,
+                      wrap: true,
+                      spacing: 'Small',
+                    },
+                    {
+                      type: 'FactSet',
+                      facts: [
+                        {
+                          title: 'Sent By:',
+                          value: email,
+                        },
+                        {
+                          title: 'Date:',
+                          value: new Date().toLocaleString(),
+                        },
+                        {
+                          title: 'Affected Groups:',
+                          value: selectedGroups.map((g) => g.name).join(', '),
+                        },
+                        {
+                          title: 'Total Users affected:',
+                          value: allUsers.length.toString(),
+                        },
+                      ],
+                      spacing: 'Medium',
+                    },
+                  ],
+                  msteams: {
+                    width: 'Full',
+                  },
+                },
+              },
+            ],
+          };
+          targetUrl = app.baseUrl;
+        } else {
+          // Standard payload for INTERNAL/EXTERNAL applications
+          payload = {
+            source: 'PM_INTERFACE',
+            notificationId: notification._id.toString(),
+            title: notification.title,
+            content: notification.content,
+            priority: 'high',
+            type: 'release_notes',
+            targetUsers: allUsers,
+            metadata: {
+              sentBy: email,
+              sentAt: new Date().toISOString(),
+              jiraReleaseNotes: notification.jiraReleaseNotes,
+              groups: selectedGroups.map((g) => ({ id: g.groupId, name: g.name })),
+              applicationId: app.applicationId,
+              applicationName: app.name,
+            },
+            trackingEnabled: true,
+            trackingCallbackUrl: `${
+              process.env.BACKEND_URL || 'http://localhost:5000'
+            }/api/notifications/track-open`,
+          };
+          targetUrl = app.baseUrl + (app.notificationEndpoint || '');
+        }
 
         console.log(`\n${'='.repeat(60)}`);
         console.log(`📤 Sending bulk notification to: ${app.name}`);
-        console.log(`   URL: ${app.baseUrl}${app.notificationEndpoint}`);
+        console.log(`   Type: ${app.applicationType}`);
+        console.log(`   URL: ${targetUrl}`);
         console.log(`   Total Users: ${allUsers.length}`);
         console.log(`   Groups: ${selectedGroups.map((g) => g.name).join(', ')}`);
         console.log(`${'='.repeat(60)}\n`);
 
-        const targetUrl = app.baseUrl + (app.notificationEndpoint || '');
         console.log(`Sending POST request to ${targetUrl}`);
         const response = await fetch(targetUrl, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            Authorization: app.apiKey ? `Bearer ${app.apiKey}` : '',
+            ...(app.applicationType !== 'TEAMS' && app.apiKey
+              ? { Authorization: `Bearer ${app.apiKey}` }
+              : {}),
             'X-PM-Interface-Source': 'true',
           },
           body: JSON.stringify(payload),

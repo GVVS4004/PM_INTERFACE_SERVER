@@ -201,6 +201,11 @@ const applicationSchema = new mongoose.Schema({
     type: String,
     default: ''
   },
+  applicationType: {
+    type: String,
+    enum: ['INTERNAL', 'EXTERNAL', 'TEAMS'],
+    required: true
+  },
   status: {
     type: String,
     enum: ['active', 'inactive', 'maintenance'],
@@ -232,7 +237,8 @@ const sentReleaseSchema = new mongoose.Schema({
     unique: true
   },
   notificationId: {
-    type: Number,
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Notification',
     required: true,
     index: true
   },
@@ -318,7 +324,8 @@ const editHistorySchema = new mongoose.Schema({
     unique: true
   },
   notificationId: {
-    type: Number,
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Notification',
     required: true,
     index: true
   },
